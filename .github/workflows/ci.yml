@@ -1,0 +1,92 @@
+# Integración continua del equipo: se ejecuta en cada push y en cada pull request a main
+name: CI
+
+on:
+  push:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  secretos:
+    name: 🔎 Secretos (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # revisa también el historial
+      - name: Buscar contraseñas y claves subidas por error
+        run: |
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz | tar -xz gitleaks
+          ./gitleaks detect --source . --redact --verbose
+
+  terraform:
+    name: 🏗️ Terraform (fmt + validate)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: p4-aws-cluster/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+      - name: Formato
+        run: terraform fmt -check -recursive -diff
+      - name: Validar cada carpeta
+        run: |
+          for d in */ ; do
+            if ls "$d"*.tf >/dev/null 2>&1; then
+              echo "::group::terraform validate $d"
+              (cd "$d" && terraform init -backend=false -input=false && terraform validate)
+              echo "::endgroup::"
+            fi
+          done
+
+  laravel:
+    name: 🐘 Laravel (dependencias + tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: laravel
+    steps:
+      - uses: actions/checkout@v4
+      - name: ¿Existe ya la app?
+        id: app
+        working-directory: .
+        run: echo "existe=$([ -f laravel/composer.json ] && echo si || echo no)" >> "$GITHUB_OUTPUT"
+      - uses: shivammathur/setup-php@v2
+        if: steps.app.outputs.existe == 'si'
+        with:
+          php-version: '8.3'
+          extensions: mbstring, pdo_sqlite
+          tools: composer
+      - name: Instalar dependencias
+        if: steps.app.outputs.existe == 'si'
+        run: composer install --no-interaction --prefer-dist --no-progress
+      - name: Tests (SQLite en memoria, sin tocar el clúster)
+        if: steps.app.outputs.existe == 'si'
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+          php artisan test
+      - name: Aviso
+        if: steps.app.outputs.existe == 'no'
+        run: echo "Todavía no hay app Laravel en laravel/ — se omite."
+
+  powershell:
+    name: 💻 PowerShell (PSScriptAnalyzer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Analizar scripts .ps1
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          $todo = Invoke-ScriptAnalyzer -Path . -Recurse
+          $todo | Format-Table ScriptName, Line, Severity, RuleName -AutoSize
+          if ($todo | Where-Object Severity -eq 'Error') { Write-Error "Hay errores en los scripts"; exit 1 }
