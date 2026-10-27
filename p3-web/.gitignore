@@ -1,0 +1,26 @@
+# WordPress: en Git solo va lo NUESTRO (tema hijo, plugins propios, scripts, docs)
+# El núcleo y los plugins de terceros se instalan en el servidor, no se suben.
+
+# Configuración con contraseñas -> solo se sube wp-config-sample.php / .env.example
+wp-config.php
+.env
+.htpasswd
+
+# Núcleo de WordPress
+wp-admin/
+wp-includes/
+/*.php
+!wp-config-sample.php
+
+# Contenido generado / pesado
+wp-content/uploads/
+wp-content/cache/
+wp-content/upgrade/
+wp-content/backup*/
+wp-content/*.log
+wp-content/debug.log
+
+# Volcados de la base de datos (pueden llevar datos de clientes)
+*.sql
+*.sql.gz
+*.wpress
