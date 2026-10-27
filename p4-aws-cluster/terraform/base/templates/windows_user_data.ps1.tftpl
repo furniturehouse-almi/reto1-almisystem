@@ -1,0 +1,20 @@
+<powershell>
+# Se ejecuta solo la primera vez que arranca la máquina
+Start-Transcript -Path 'C:\Windows\Temp\arranque-reto.log' -Append
+
+# Hora de España
+Set-TimeZone -Id 'Romance Standard Time'
+
+# Permitir ping dentro de la VPC (para las pruebas)
+Enable-NetFirewallRule -Name 'FPS-ICMP4-ERQ-In' -ErrorAction SilentlyContinue
+
+# Roles que necesita esta máquina
+Install-WindowsFeature -Name ${features} -IncludeManagementTools
+
+# Nombre del equipo y reinicio
+if ($env:COMPUTERNAME -ne '${hostname}') {
+    Stop-Transcript
+    Rename-Computer -NewName '${hostname}' -Force -Restart
+}
+Stop-Transcript
+</powershell>
