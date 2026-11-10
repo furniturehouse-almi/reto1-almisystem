@@ -39,7 +39,7 @@ if 'demo_login' not in s:
             }
         }
 
-        if (Auth::attempt("
+        if (Auth::attempt("""
     if old not in s:
         raise SystemExit("ERROR: no encontré el punto de LoginController.php donde añadir el modo demo")
     s = s.replace(old, new, 1)
