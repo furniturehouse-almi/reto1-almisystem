@@ -1,7 +1,7 @@
 # Red creada en ..\base (VPC, subredes, NAT)
 data "terraform_remote_state" "base" {
   backend = "local"
-  config  = {
+  config = {
     path = "${path.module}/../base/terraform.tfstate"
   }
 }
