@@ -1,0 +1,69 @@
+#!/bin/bash
+# =============================================================================
+# Arranque de cada servidor web (Amazon Linux 2023):
+#  Apache + PHP, monta el EFS compartido en /var/www/html y, solo la primera vez
+#  (con un candado en el EFS), descarga WordPress y crea wp-config.php leyendo la
+#  contraseña de la BD desde Parameter Store. Registro en /var/log/wp-setup.log
+# =============================================================================
+exec > >(tee -a /var/log/wp-setup.log) 2>&1
+set -x
+
+for i in 1 2 3 4 5; do
+  dnf install -y httpd php php-mysqlnd php-gd php-mbstring php-xml php-intl php-zip php-opcache amazon-efs-utils && break
+  sleep 15
+done
+
+# --- EFS compartido ---
+mkdir -p /var/www/html
+grep -q "${efs_id}" /etc/fstab || echo "${efs_id}:/ /var/www/html efs _netdev,tls 0 0" >> /etc/fstab
+for i in $(seq 1 20); do mount -a && mountpoint -q /var/www/html && break; sleep 15; done
+
+# --- Comprobación de salud local (cada servidor la suya, fuera del EFS) ---
+mkdir -p /var/www/salud
+echo "OK $(hostname)" > /var/www/salud/salud.html
+cat > /etc/httpd/conf.d/salud.conf <<'CONF'
+Alias /salud.html /var/www/salud/salud.html
+<Directory /var/www/salud>
+    Require all granted
+</Directory>
+<Directory /var/www/html>
+    AllowOverride All
+</Directory>
+CONF
+
+# --- WordPress: solo lo instala el primer servidor que llega ---
+(
+  flock -w 600 9
+  if [ ! -f /var/www/html/wp-config.php ]; then
+    cd /tmp
+    curl -fsSL -o wp.tar.gz https://wordpress.org/latest.tar.gz
+    tar -xzf wp.tar.gz
+    cp -a wordpress/. /var/www/html/
+    DB_PASS=$(aws ssm get-parameter --region ${region} --name "${ssm_param}" --with-decryption --query Parameter.Value --output text)
+    SALTS=$(curl -fsSL https://api.wordpress.org/secret-key/1.1/salt/)
+    cat > /var/www/html/wp-config.php <<WPC
+<?php
+define('DB_NAME', '${db_name}');
+define('DB_USER', '${db_user}');
+define('DB_PASSWORD', '$DB_PASS');
+define('DB_HOST', '${db_host}');
+define('DB_CHARSET', 'utf8mb4');
+define('DB_COLLATE', '');
+$SALTS
+\$table_prefix = 'wp_';
+// Detrás del ALB: el HTTPS termina en el balanceador
+if (isset(\$_SERVER['HTTP_X_FORWARDED_PROTO']) && \$_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') { \$_SERVER['HTTPS'] = 'on'; }
+define('FORCE_SSL_ADMIN', true);
+define('WP_DEBUG', false);
+if (!defined('ABSPATH')) { define('ABSPATH', __DIR__ . '/'); }
+require_once ABSPATH . 'wp-settings.php';
+WPC
+    # Página para la demo: dice qué servidor ha respondido
+    cat > /var/www/html/servidor.php <<'PHP'
+<?php header('Cache-Control: no-store'); echo '<h1>Servidor: ' . gethostname() . ' (' . $_SERVER['SERVER_ADDR'] . ')</h1>';
+PHP
+    chown -R apache:apache /var/www/html
+  fi
+) 9>/var/www/html/.instalando.lock
+
+systemctl enable --now httpd
